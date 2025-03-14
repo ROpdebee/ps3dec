@@ -1,8 +1,8 @@
 use aes::cipher::consts::U16;
 use aes::cipher::generic_array::GenericArray;
-use aes::cipher::BlockDecryptMut;
-use aes::Aes128Dec;
-use cbc::Decryptor;
+use aes::cipher::{BlockDecryptMut,BlockEncryptMut};
+use aes::{Aes128Dec, Aes128Enc};
+use cbc::{Decryptor, Encryptor};
 use log::{info, warn};
 use std::fs::File;
 use std::io;
@@ -10,10 +10,12 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::MutexGuard;
 
 type Aes128CbcDec = Decryptor<Aes128Dec>;
+type Aes128CbcEnc = Encryptor<Aes128Enc>;
 
 pub struct Region {
-    start: u64,
-    end: u64,
+    first_sector: u64,
+    last_sector: u64,
+    is_encrypted: bool,
 }
 
 // Reliability is uncertain on key validation.
@@ -46,16 +48,21 @@ pub fn generate_iv(sector: u64) -> GenericArray<u8, U16> {
     GenericArray::clone_from_slice(&iv_bytes)
 }
 
-pub fn is_encrypted(regions: &[Region], sector: u64, sector_data: &[u8]) -> bool {
-    if sector_data.iter().all(|&b| b == 0) {
-        return false;
-    }
-    regions.iter().any(|r| sector >= r.start && sector < r.end)
+pub fn is_encrypted(regions: &[Region], sector: u64) -> bool {
+    let region = regions.iter().find(|r| sector >= r.first_sector && sector <= r.last_sector).expect("Sector not in region");
+    region.is_encrypted
 }
 
 pub fn decrypt_sector(cipher: &mut Aes128CbcDec, sector_data: &mut [u8]) -> io::Result<()> {
     for chunk in sector_data.chunks_exact_mut(16) {
         cipher.decrypt_block_mut(GenericArray::from_mut_slice(chunk));
+    }
+    Ok(())
+}
+
+pub fn encrypt_sector(cipher: &mut Aes128CbcEnc, sector_data: &mut [u8]) -> io::Result<()> {
+    for chunk in sector_data.chunks_exact_mut(16) {
+        cipher.encrypt_block_mut(GenericArray::from_mut_slice(chunk));
     }
     Ok(())
 }
@@ -71,18 +78,23 @@ pub fn extract_regions(reader: &mut MutexGuard<BufReader<File>>) -> io::Result<V
 
     let mut is_encrypted = false;
     for i in 0..regions_count {
-        let region_offset = 4 + i * 8;
+        let region_offset = 4 * i + 8;
+        // First sector of encrypted region = 1 + last sector of plain region
+        // Last sector of encrypted region = first sector of next region - 1
+        let adjust = if is_encrypted { 1 } else { 0 };
         let start_sector =
-            u32::from_be_bytes(header[region_offset..region_offset + 4].try_into().unwrap());
+            u32::from_be_bytes(header[region_offset..region_offset + 4].try_into().unwrap()) + adjust;
         let end_sector = u32::from_be_bytes(
             header[region_offset + 4..region_offset + 8]
                 .try_into()
                 .unwrap(),
-        );
+        ) - adjust;
 
+        info!("Region {} from {:x} to {:x} is encrypted: {}", i, start_sector, end_sector, is_encrypted);
         regions.push(Region {
-            start: start_sector as u64,
-            end: end_sector as u64,
+            first_sector: start_sector as u64,
+            last_sector: end_sector as u64,
+            is_encrypted: is_encrypted
         });
 
         is_encrypted = !is_encrypted;

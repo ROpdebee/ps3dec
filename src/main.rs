@@ -2,42 +2,43 @@ pub mod args;
 pub mod autodetect;
 pub mod utils;
 use crate::autodetect::detect_key;
+use crate::autodetect::detect_key_in_directory;
 use crate::utils::key_validation;
 use args::Ps3decargs;
-use chrono::Local;
+// use chrono::Local;
 use clap::Parser;
 use log::{debug, error, info, LevelFilter};
 use log4rs::{
-    append::{console::ConsoleAppender, file::FileAppender},
+    append::{console::ConsoleAppender, /*file::FileAppender*/},
     config::{Appender, Config, Root},
     encode::pattern::PatternEncoder,
 };
-use ps3decremake::decrypt;
+use ps3decremake::{decrypt, encrypt};
 use std::io::{self};
 use std::path::Path;
-use std::{env, fs};
+use std::{env, /*fs*/};
 
 fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
-    let log_dir = Path::new("log");
-    fs::create_dir_all(log_dir)?;
-    let now = Local::now();
-    let log_file_name = format!("log/{}.log", now.format("%Y-%m-%d_%H-%M-%S"));
+    // let log_dir = Path::new("log");
+    // fs::create_dir_all(log_dir)?;
+    // let now = Local::now();
+    // let log_file_name = format!("log/{}.log", now.format("%Y-%m-%d_%H-%M-%S"));
 
     let stdout = ConsoleAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{d} [{l}] - {m}\n")))
         .build();
 
-    let logfile = FileAppender::builder()
+    /*let logfile = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{d} [{l}] - {m}\n")))
-        .build(log_file_name)?;
+        .build(log_file_name)?;*/
 
     let config = Config::builder()
         .appender(Appender::builder().build("stdout", Box::new(stdout)))
-        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        //.appender(Appender::builder().build("logfile", Box::new(logfile)))
         .build(
             Root::builder()
                 .appender("stdout")
-                .appender("logfile")
+                //.appender("logfile")
                 .build(LevelFilter::Trace),
         )?;
 
@@ -75,15 +76,21 @@ fn main() -> io::Result<()> {
         }
     } else if args.len() > 1 {
         let ps3_args = Ps3decargs::parse();
+        let process: fn(String, &str, usize) -> io::Result<()> = if ps3_args.encrypt { encrypt } else { decrypt };
+
         if ps3_args.auto {
-            let split = &ps3_args.iso.split(".iso").next().unwrap_or("");
-            if let Ok(Some(key)) = detect_key(split.to_string()) {
-                decrypt(ps3_args.iso, &key, ps3_args.tc)?;
+            if let Ok(Some(key)) = detect_key_in_directory(&ps3_args.iso) {
+                process(ps3_args.iso, &key, ps3_args.tc)?;
+            } else {
+                let split = &ps3_args.iso.split(".iso").next().unwrap_or("");
+                if let Ok(Some(key)) = detect_key(split.to_string()) {
+                    process(ps3_args.iso, &key, ps3_args.tc)?;
+                }
             }
         } else {
             if let Some(dk) = ps3_args.dk {
                 if key_validation(&dk) {
-                    decrypt(ps3_args.iso, &dk, ps3_args.tc)?;
+                    process(ps3_args.iso, &dk, ps3_args.tc)?;
                 } else {
                     error!("Error: Invalid PS3 decryption key format.");
                 }
