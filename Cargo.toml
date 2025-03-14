@@ -31,5 +31,5 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "ps3decremake_cli"
+name = "ps3dec"
 path = "src/main.rs"
